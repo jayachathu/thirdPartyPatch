@@ -1,0 +1,199 @@
+diff --git a/kerberos-client/pom.xml b/kerberos-client/pom.xml
+index 98e3dc9..77fa9ec 100644
+--- a/kerberos-client/pom.xml
++++ b/kerberos-client/pom.xml
+@@ -25,7 +25,7 @@
+     <artifactId>apacheds-parent</artifactId>
+     <version>2.0.0-M23</version>
+   </parent>
+-  <artifactId>kerberos-client</artifactId>
++  <artifactId>kerberos-client-patch</artifactId>
+   <name>kerberos-client</name>
+   <description>ApacheDS Kerberos Client</description>
+   
+diff --git a/kerberos-client/src/main/java/org/apache/directory/kerberos/client/AdChangePasswordResult.java b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/AdChangePasswordResult.java
+new file mode 100644
+index 0000000..d059a31
+--- /dev/null
++++ b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/AdChangePasswordResult.java
+@@ -0,0 +1,89 @@
++package org.apache.directory.kerberos.client;
++
++import java.nio.ByteBuffer;
++
++public class AdChangePasswordResult extends ChangePasswordResult {
++	private static final long AD_POLICY_TIME_TO_DAYS = 86400 * 10000000L;
++	private int zeroBytes;
++	private int minPasswordLength;
++	private int passwordHistory;
++	private int passwordProperties; /* see defines below */
++	private Long expire;              /* in seconds * 10,000,000 */
++	private long minPasswordage;
++	
++	public AdChangePasswordResult(byte[] userData) {
++		this.decodeAdPolicInfo(ByteBuffer.wrap(userData));
++	}
++	
++	public int getZeroBytes() {
++		return zeroBytes;
++	}
++
++	public void setZeroBytes(int zeroBytes) {
++		this.zeroBytes = zeroBytes;
++	}
++
++	public int getMinPasswordLength() {
++		return minPasswordLength;
++	}
++
++	public void setMinPasswordLength(int minPasswordLength) {
++		this.minPasswordLength = minPasswordLength;
++	}
++
++	public int getPasswordHistory() {
++		return passwordHistory;
++	}
++
++	public void setPasswordHistory(int passwordHistory) {
++		this.passwordHistory = passwordHistory;
++	}
++
++	public int getPasswordProperties() {
++		return passwordProperties;
++	}
++
++	public void setPasswordProperties(int passwordProperties) {
++		this.passwordProperties = passwordProperties;
++	}
++
++	public long getMinPasswordage() {
++		return minPasswordage;
++	}
++
++	public void setMinPasswordage(long minPasswordage) {
++		this.minPasswordage = minPasswordage;
++	}
++
++	public Long getExpire() {
++		return expire;
++	}
++	
++	private void decodeAdPolicInfo(ByteBuffer userData) {
++		this.zeroBytes = userData.getShort();
++		if (this.zeroBytes != 0) {
++				return;
++		}
++		/* Read in the rest of structure */
++		int min_password_length = userData.getInt();
++		int password_history = userData.getInt();
++		int password_properties = userData.getInt();
++		long expire = userData.getLong();
++		long min_passwordage = userData.getLong() /AD_POLICY_TIME_TO_DAYS;
++		if (password_properties > 0) {
++			this.passwordProperties = password_properties;
++		}
++		if (min_password_length > 0) {
++			this.minPasswordLength = min_password_length;
++		}
++		if (password_history > 0) {
++			this.passwordHistory = password_history;
++		}
++		
++		if (min_passwordage >= 0 ) {
++			this.minPasswordage = min_passwordage;
++		}
++
++	}
++
++}
+diff --git a/kerberos-client/src/main/java/org/apache/directory/kerberos/client/ChangePasswordResult.java b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/ChangePasswordResult.java
+index 6c94bde..6c8a418 100644
+--- a/kerberos-client/src/main/java/org/apache/directory/kerberos/client/ChangePasswordResult.java
++++ b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/ChangePasswordResult.java
+@@ -20,6 +20,8 @@
+ 
+ package org.apache.directory.kerberos.client;
+ 
++import java.util.Arrays;
++
+ /**
+  * The class to hold the result of change password operation.
+  *
+@@ -28,19 +30,45 @@ package org.apache.directory.kerberos.client;
+ public class ChangePasswordResult
+ {
+     /** the result code */
+-    private ChangePasswordResultCode code;
++    protected ChangePasswordResultCode code;
+     
+     /** result message */
+     private String message;
++    /** active directory message data container */
++    private AdChangePasswordResult adchangePasswordReult;
++    private static final int AD_POLICY_INFO_LENGTH = 30;
+     
++    public AdChangePasswordResult getAdchangePasswordReult() 
++    {
++		return adchangePasswordReult;
++	}
+     
++	public void setAdchangePasswordReult(AdChangePasswordResult adchangePasswordReult) 
++	{
++		this.adchangePasswordReult = adchangePasswordReult;
++	}
++	
++	public ChangePasswordResult()
++	{
++		
++	}
++ 
++       
++
+     public ChangePasswordResult( byte[] userData )
+     {
+         // first 2 bytes contain the result code ( from 0-7 )
+         int r = ( userData[0] & 0xFFFF << 8 ) + ( userData[1] & 0xFFFF );
+         
+         code = ChangePasswordResultCode.getByValue( r );
+-        
++        byte[] filteredByteArray = Arrays.copyOfRange(userData, 2, userData.length);
++        if (filteredByteArray.length != AD_POLICY_INFO_LENGTH) {
++			message = new String(userData, 2, userData.length - 2);
++		}
++		else {
++			adchangePasswordReult = new AdChangePasswordResult(filteredByteArray);
++			adchangePasswordReult.code = this.code;
++		}
+         message = new String( userData, 2, userData.length - 2 );
+     }
+ 
+@@ -50,13 +78,11 @@ public class ChangePasswordResult
+         return code;
+     }
+ 
+-
+     public String getMessage()
+     {
+         return message;
+     }
+-
+-
++    
+     @Override
+     public String toString()
+     {
+diff --git a/kerberos-client/src/main/java/org/apache/directory/kerberos/client/KdcConnection.java b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/KdcConnection.java
+index 6a70a33..70a9c3b 100644
+--- a/kerberos-client/src/main/java/org/apache/directory/kerberos/client/KdcConnection.java
++++ b/kerberos-client/src/main/java/org/apache/directory/kerberos/client/KdcConnection.java
+@@ -606,7 +606,9 @@ public class KdcConnection
+             part = KerberosDecoder.decodeEncKrbPrivPart( data );
+             
+             ChangePasswordResult result = new ChangePasswordResult( part.getUserData() );
+-            
++            if (result.getAdchangePasswordReult() != null) {
++         	   result = result.getAdchangePasswordReult();
++            }
+             return result;
+         }
+         catch( ChangePasswordException e )
